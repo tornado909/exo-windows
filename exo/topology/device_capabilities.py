@@ -76,6 +76,7 @@ CHIP_FLOPS = {
   "NVIDIA GEFORCE RTX 4070": DeviceFlops(fp32=29.0*TFLOPS, fp16=58.0*TFLOPS, int8=116.0*TFLOPS),
   "NVIDIA GEFORCE RTX 4060 TI 16GB": DeviceFlops(fp32=22.0*TFLOPS, fp16=44.0*TFLOPS, int8=88.0*TFLOPS),
   "NVIDIA GEFORCE RTX 4060 TI": DeviceFlops(fp32=22.0*TFLOPS, fp16=44.0*TFLOPS, int8=88.0*TFLOPS),
+  "NVIDIA GEFORCE RTX 4060": DeviceFlops(fp32=20.3*TFLOPS, fp16=40.6*TFLOPS, int8=81.2*TFLOPS),
   # RTX 30 series
   "NVIDIA GEFORCE RTX 3050": DeviceFlops(fp32=9.11*TFLOPS, fp16=18.22*TFLOPS, int8=36.44*TFLOPS),
   "NVIDIA GEFORCE RTX 3060": DeviceFlops(fp32=13.0*TFLOPS, fp16=26.0*TFLOPS, int8=52.0*TFLOPS),
@@ -152,7 +153,7 @@ async def device_capabilities() -> DeviceCapabilities:
   elif psutil.LINUX:
     return await linux_device_capabilities()
   elif psutil.WINDOWS:
-    return await windows_device_capabilities()
+    return windows_device_capabilities()
   else:
     return DeviceCapabilities(
       model="Unknown Device",

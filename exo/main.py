@@ -32,10 +32,10 @@ from exo.inference.inference_engine import get_inference_engine, InferenceEngine
 from exo.inference.tokenizers import resolve_tokenizer
 from exo.models import build_base_shard, get_repo
 from exo.viz.topology_viz import TopologyViz
-import uvloop
+#import uvloop
 from contextlib import asynccontextmanager
 import concurrent.futures
-import resource
+#$import resource
 import psutil
 
 # TODO: figure out why this is happening
@@ -46,22 +46,22 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 # Configure uvloop for maximum performance
 def configure_uvloop():
     # Install uvloop as event loop policy
-    uvloop.install()
+    #uvloop.install()
 
     # Create new event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     # Increase file descriptor limits on Unix systems
-    if not psutil.WINDOWS:
-      soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-      try:
-          resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-      except ValueError:
-        try:
-          resource.setrlimit(resource.RLIMIT_NOFILE, (8192, hard))
-        except ValueError:
-          pass
+    #if not psutil.WINDOWS:
+    #  soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    #  try:
+    #      resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    #  except ValueError:
+    #    try:
+    #      resource.setrlimit(resource.RLIMIT_NOFILE, (8192, hard))
+    #    except ValueError:
+    #      pass
 
     # Configure thread pool for blocking operations
     loop.set_default_executor(
