@@ -84,19 +84,57 @@ async def fetch_file_list(session, repo_id, revision, path=""):
       raise Exception(f"Failed to fetch file list: {response.status}")
 
 async def download_file(session: aiohttp.ClientSession, repo_id: str, revision: str, path: str, target_dir: Path, on_progress: Callable[[int, int], None] = lambda _, __: None) -> Path:
-  if (target_dir/path).exists(): return target_dir/path
-  await aios.makedirs((target_dir/path).parent, exist_ok=True)
-  base_url = f"{get_hf_endpoint()}/{repo_id}/resolve/{revision}/"
-  url = urljoin(base_url, path)
-  headers = await get_auth_headers()
-  async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=1800, connect=60, sock_read=1800, sock_connect=60)) as r:
-    assert r.status == 200, f"Failed to download {path} from {url}: {r.status}"
-    length = int(r.headers.get('content-length', 0))
-    n_read = 0
-    async with aiofiles.tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temp_file:
-      while chunk := await r.content.read(1024 * 1024): on_progress(n_read := n_read + await temp_file.write(chunk), length)
-      await aios.rename(temp_file.name, target_dir/path)
-    return target_dir/path
+  try:
+    target_path = target_dir / path
+    if target_path.exists():
+        return target_path
+    
+    await aios.makedirs(target_path.parent, exist_ok=True)
+    
+    base_url = f"{get_hf_endpoint()}/{repo_id}/resolve/{revision}/"
+    url = urljoin(base_url, path)
+    headers = await get_auth_headers()
+    
+    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=1800, connect=60, sock_read=1800, sock_connect=60)) as r:
+        assert r.status == 200, f"Failed to download {path} from {url}: {r.status}"
+        
+        length = int(r.headers.get('content-length', 0))
+        n_read = 0
+        
+        async with aiofiles.tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temp_file:
+            while chunk := await r.content.read(1024 * 1024):
+                n_read += await temp_file.write(chunk)
+                on_progress(n_read, length)
+            
+            # Close the temporary file explicitly before renaming
+            await temp_file.close()
+            
+            # Attempt to rename the file safely
+            await safe_rename(temp_file.name, target_path)
+            
+            return target_path
+
+  except PermissionError as e:
+      print(f"Permission error: {e}")
+      raise
+  except Exception as e:
+      print(f"Exception in download_file: {e}")
+      raise
+  
+async def safe_rename(src, dst, retries=5, delay=1):
+    for attempt in range(retries):
+        try:
+            await aios.rename(src, dst)
+            print(f"Successfully renamed {src} to {dst}")
+            return True
+        except PermissionError:
+            if attempt < retries - 1:
+                await asyncio.sleep(delay * (2 ** attempt))  # Exponential backoff
+                print(f"Retry {attempt + 1}/{retries} for renaming {src} to {dst}")
+            else:
+                print(f"Failed to rename {src} to {dst} after {retries} attempts")
+                raise
+    return False
 
 def calculate_repo_progress(shard: Shard, repo_id: str, revision: str, file_progress: Dict[str, RepoFileProgressEvent], all_start_time: float) -> RepoProgressEvent:
   all_total_bytes = sum([p.total for p in file_progress.values()])
