@@ -19,6 +19,9 @@ import json
 import traceback
 import shutil
 import tempfile
+import logging
+
+logger = logging.getLogger(__name__)
 
 def exo_home() -> Path:
   return Path(os.environ.get("EXO_HOME", Path.home()/".cache"/"exo"))
@@ -57,11 +60,11 @@ async def seed_models(seed_dir: Union[str, Path]):
   for path in source_dir.iterdir():
     if path.is_dir() and path.name.startswith("models--"):
       dest_path = dest_dir/path.name
-      if await aios.path.exists(dest_path): print('Skipping moving model to .cache directory')
+      if await aios.path.exists(dest_path): logger.info('Skipping moving model to .cache directory')
       else:
         try: await aios.rename(str(path), str(dest_path))
         except:
-          print(f"Error seeding model {path} to {dest_path}")
+          logger.error(f"Error seeding model {path} to {dest_path}")
           traceback.print_exc()
 
 async def fetch_file_list(session, repo_id, revision, path=""):
@@ -84,19 +87,57 @@ async def fetch_file_list(session, repo_id, revision, path=""):
       raise Exception(f"Failed to fetch file list: {response.status}")
 
 async def download_file(session: aiohttp.ClientSession, repo_id: str, revision: str, path: str, target_dir: Path, on_progress: Callable[[int, int], None] = lambda _, __: None) -> Path:
-  if (target_dir/path).exists(): return target_dir/path
-  await aios.makedirs((target_dir/path).parent, exist_ok=True)
-  base_url = f"{get_hf_endpoint()}/{repo_id}/resolve/{revision}/"
-  url = urljoin(base_url, path)
-  headers = await get_auth_headers()
-  async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=1800, connect=60, sock_read=1800, sock_connect=60)) as r:
-    assert r.status == 200, f"Failed to download {path} from {url}: {r.status}"
-    length = int(r.headers.get('content-length', 0))
-    n_read = 0
-    async with aiofiles.tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temp_file:
-      while chunk := await r.content.read(1024 * 1024): on_progress(n_read := n_read + await temp_file.write(chunk), length)
-      await aios.rename(temp_file.name, target_dir/path)
-    return target_dir/path
+  try:
+    target_path = target_dir / path
+    if target_path.exists():
+        return target_path
+
+    await aios.makedirs(target_path.parent, exist_ok=True)
+
+    base_url = f"{get_hf_endpoint()}/{repo_id}/resolve/{revision}/"
+    url = urljoin(base_url, path)
+    headers = await get_auth_headers()
+
+    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=1800, connect=60, sock_read=1800, sock_connect=60)) as r:
+        assert r.status == 200, f"Failed to download {path} from {url}: {r.status}"
+
+        length = int(r.headers.get('content-length', 0))
+        n_read = 0
+
+        async with aiofiles.tempfile.NamedTemporaryFile(dir=target_dir, delete=False) as temp_file:
+            while chunk := await r.content.read(1024 * 1024):
+                n_read += await temp_file.write(chunk)
+                on_progress(n_read, length)
+
+            # Close the temporary file explicitly before renaming
+            await temp_file.close()
+
+            # Attempt to rename the file safely
+            await safe_rename(temp_file.name, target_path)
+
+            return target_path
+
+  except PermissionError as e:
+      logger.error(f"Permission error: {e}")
+      raise
+  except Exception as e:
+      logger.error(f"Exception in download_file: {e}")
+      raise
+
+async def safe_rename(src, dst, retries=5, delay=1):
+    for attempt in range(retries):
+        try:
+            await aios.rename(src, dst)
+            logger.info(f"Successfully renamed {src} to {dst}")
+            return True
+        except PermissionError:
+            if attempt < retries - 1:
+                await asyncio.sleep(delay * (2 ** attempt))  # Exponential backoff
+                logger.info(f"Retry {attempt + 1}/{retries} for renaming {src} to {dst}")
+            else:
+                logger.error(f"Failed to rename {src} to {dst} after {retries} attempts")
+                raise
+    return False
 
 def calculate_repo_progress(shard: Shard, repo_id: str, revision: str, file_progress: Dict[str, RepoFileProgressEvent], all_start_time: float) -> RepoProgressEvent:
   all_total_bytes = sum([p.total for p in file_progress.values()])
@@ -120,12 +161,12 @@ async def resolve_allow_patterns(shard: Shard, inference_engine_classname: str) 
     weight_map = await get_weight_map(get_repo(shard.model_id, inference_engine_classname))
     return get_allow_patterns(weight_map, shard)
   except:
-    if DEBUG >= 1: print(f"Error getting weight map for {shard.model_id=} and inference engine {inference_engine_classname}")
+    if DEBUG >= 1: logger.error(f"Error getting weight map for {shard.model_id=} and inference engine {inference_engine_classname}")
     if DEBUG >= 1: traceback.print_exc()
     return ["*"]
 
 async def download_shard(shard: Shard, inference_engine_classname: str, on_progress: AsyncCallbackSystem[str, Tuple[Shard, RepoProgressEvent]], max_parallel_downloads: int = 6, skip_download: bool = False) -> tuple[Path, RepoProgressEvent]:
-  if DEBUG >= 2 and not skip_download: print(f"Downloading {shard.model_id=} for {inference_engine_classname}")
+  if DEBUG >= 2 and not skip_download: logger.info(f"Downloading {shard.model_id=} for {inference_engine_classname}")
   repo_id = get_repo(shard.model_id, inference_engine_classname)
   revision = "main"
   target_dir = await ensure_downloads_dir()/repo_id.replace("/", "--")
@@ -135,7 +176,7 @@ async def download_shard(shard: Shard, inference_engine_classname: str, on_progr
     raise ValueError(f"No repo found for {shard.model_id=} and inference engine {inference_engine_classname}")
 
   allow_patterns = await resolve_allow_patterns(shard, inference_engine_classname)
-  if DEBUG >= 2: print(f"Downloading {shard.model_id=} with {allow_patterns=}")
+  if DEBUG >= 2: logger.info(f"Downloading {shard.model_id=} with {allow_patterns=}")
 
   all_start_time = time.time()
   async with aiohttp.ClientSession() as session:
@@ -149,7 +190,7 @@ async def download_shard(shard: Shard, inference_engine_classname: str, on_progr
       eta = timedelta(seconds=(total_bytes - curr_bytes) / speed)
       file_progress[file["path"]] = RepoFileProgressEvent(repo_id, revision, file["path"], curr_bytes, downloaded_this_session, total_bytes, speed, eta, "in_progress", start_time)
       on_progress.trigger_all(shard, calculate_repo_progress(shard, repo_id, revision, file_progress, all_start_time))
-      if DEBUG >= 6: print(f"Downloading {file['path']} {curr_bytes}/{total_bytes} {speed} {eta}")
+      if DEBUG >= 6: logger.info(f"Downloading {file['path']} {curr_bytes}/{total_bytes} {speed} {eta}")
     for file in filtered_file_list:
       downloaded_bytes = (await aios.stat(target_dir/file["path"])).st_size if await aios.path.exists(target_dir/file["path"]) else 0
       file_progress[file["path"]] = RepoFileProgressEvent(repo_id, revision, file["path"], downloaded_bytes, 0, file["size"], 0, timedelta(0), "not_started" if downloaded_bytes == 0 else "complete" if downloaded_bytes == file["size"] else "in_progress", time.time())
@@ -195,9 +236,9 @@ class CachedShardDownloader(ShardDownloader):
 
   async def ensure_shard(self, shard: Shard, inference_engine_name: str) -> Path:
     if (inference_engine_name, shard) in self.cache:
-      if DEBUG >= 2: print(f"ensure_shard cache hit {shard=} for {inference_engine_name}")
+      if DEBUG >= 2: logger.info(f"ensure_shard cache hit {shard=} for {inference_engine_name}")
       return self.cache[(inference_engine_name, shard)]
-    if DEBUG >= 2: print(f"ensure_shard cache miss {shard=} for {inference_engine_name}")
+    if DEBUG >= 2: logger.info(f"ensure_shard cache miss {shard=} for {inference_engine_name}")
     target_dir = await self.shard_downloader.ensure_shard(shard, inference_engine_name)
     self.cache[(inference_engine_name, shard)] = target_dir
     return target_dir
@@ -218,9 +259,9 @@ class NewShardDownloader(ShardDownloader):
     return target_dir
 
   async def get_shard_download_status(self, inference_engine_name: str) -> list[tuple[Path, RepoProgressEvent]]:
-    if DEBUG >= 2: print("Getting shard download status for", inference_engine_name)
+    if DEBUG >= 2: logger.info("Getting shard download status for", inference_engine_name)
     downloads = await asyncio.gather(*[download_shard(build_full_shard(model_id, inference_engine_name), inference_engine_name, self.on_progress, skip_download=True) for model_id in get_supported_models([[inference_engine_name]])], return_exceptions=True)
-    if DEBUG >= 6: print("Downloaded shards:", downloads)
-    if any(isinstance(d, Exception) for d in downloads) and DEBUG >= 1: print("Error downloading shards:", [d for d in downloads if isinstance(d, Exception)])
+    if DEBUG >= 6: logger.info("Downloaded shards:", downloads)
+    if any(isinstance(d, Exception) for d in downloads) and DEBUG >= 1: logger.error("Error downloading shards:", [d for d in downloads if isinstance(d, Exception)])
     return [d for d in downloads if not isinstance(d, Exception)]
 

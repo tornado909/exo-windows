@@ -28,10 +28,20 @@ from exo.inference.inference_engine import get_inference_engine
 from exo.inference.tokenizers import resolve_tokenizer
 from exo.models import build_base_shard, get_repo
 from exo.viz.topology_viz import TopologyViz
-import uvloop
 import concurrent.futures
-import resource
 import psutil
+import sys
+
+try:
+  import resource
+except ImportError:
+  resource = None
+
+if sys.platform == "win32":
+    async_lib = None  # uvloop недоступен на Windows
+else:
+    import uvloop
+    async_lib = uvloop
 
 # TODO: figure out why this is happening
 os.environ["GRPC_VERBOSITY"] = "error"
@@ -39,20 +49,27 @@ os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 # Configure uvloop for maximum performance
-def configure_uvloop():
-    uvloop.install()
+def configure_async_lib():
+    if async_lib:  # Используем uvloop на Unix
+        async_lib.install()
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # Increase file descriptor limits on Unix systems
-    if not psutil.WINDOWS:
-      soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-      try: resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-      except ValueError:
-        try: resource.setrlimit(resource.RLIMIT_NOFILE, (8192, hard))
-        except ValueError: pass
+    # Увеличение лимита дескрипторов файлов на Unix
+    if sys.platform != "win32":
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except ValueError:
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (8192, hard))
+            except ValueError:
+                pass
 
-    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 1) * 4)))
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(32, (os.cpu_count() or 1) * 4)
+    ))
     return loop
 
 # parse args
@@ -85,7 +102,7 @@ parser.add_argument("--inference-engine", type=str, default=None, help="Inferenc
 parser.add_argument("--disable-tui", action=argparse.BooleanOptionalAction, help="Disable TUI")
 parser.add_argument("--run-model", type=str, help="Specify a model to run directly")
 parser.add_argument("--prompt", type=str, help="Prompt for the model when using --run-model", default="Who are you?")
-parser.add_argument("--default-temp", type=float, help="Default token sampling temperature", default=0.0)
+parser.add_argument("--default-temp", type=float, help="Default token sampling temperature", default=0.7)
 parser.add_argument("--tailscale-api-key", type=str, default=None, help="Tailscale API key")
 parser.add_argument("--tailnet-name", type=str, default=None, help="Tailnet name")
 parser.add_argument("--node-id-filter", type=str, default=None, help="Comma separated list of allowed node IDs (only for UDP and Tailscale discovery)")
@@ -359,7 +376,7 @@ async def main():
   elif args.command == "eval" or args.command == 'train':
     model_name = args.model_name
     dataloader = lambda tok: load_dataset(args.data, preprocess=lambda item: tok(item)
-                                                   , loadline=lambda line: json.loads(line).get("text",""))
+                                                    , loadline=lambda line: json.loads(line).get("text",""))
     if args.command == 'eval':
       if not model_name:
         print("Error: Much like a human, I can't evaluate anything without a model")
@@ -383,12 +400,13 @@ async def main():
 def run():
     loop = None
     try:
-        loop = configure_uvloop()
+        loop = configure_async_lib()
         loop.run_until_complete(main())
     except KeyboardInterrupt:
         print("\nShutdown requested... exiting")
     finally:
-        if loop: loop.close()
+        if loop:
+          loop.close()
 
 if __name__ == "__main__":
   run()

@@ -137,7 +137,7 @@ def remap_messages(messages: List[Message]) -> List[Message]:
 def build_prompt(tokenizer, _messages: List[Message], tools: Optional[List[Dict]] = None):
   messages = remap_messages(_messages)
   chat_template_args = {"conversation": [m.to_dict() for m in messages], "tokenize": False, "add_generation_prompt": True}
-  if tools: 
+  if tools:
     chat_template_args["tools"] = tools
 
   try:
@@ -147,7 +147,7 @@ def build_prompt(tokenizer, _messages: List[Message], tools: Optional[List[Dict]
   except UnicodeEncodeError:
     # Handle Unicode encoding by ensuring everything is UTF-8
     chat_template_args["conversation"] = [
-      {k: v.encode('utf-8').decode('utf-8') if isinstance(v, str) else v 
+      {k: v.encode('utf-8').decode('utf-8') if isinstance(v, str) else v
        for k, v in m.to_dict().items()}
       for m in messages
     ]
@@ -166,7 +166,7 @@ def parse_chat_request(data: dict, default_model: str):
   return ChatCompletionRequest(
     data.get("model", default_model),
     [parse_message(msg) for msg in data["messages"]],
-    data.get("temperature", 0.0),
+    data.get("temperature", 0.7),
     data.get("tools", None),
   )
 
@@ -234,7 +234,7 @@ class ChatGPTAPI:
       self.static_dir = Path(__file__).parent.parent/"tinychat"
       self.app.router.add_get("/", self.handle_root)
       self.app.router.add_static("/", self.static_dir, name="static")
-      
+
     # Always add images route, regardless of compilation status
     self.images_dir = get_exo_images_dir()
     self.images_dir.mkdir(parents=True, exist_ok=True)
@@ -415,7 +415,7 @@ class ChatGPTAPI:
           return web.json_response({"detail": "Response generation timed out"}, status=408)
 
         except Exception as e:
-          if DEBUG >= 2: 
+          if DEBUG >= 2:
             print(f"[ChatGPTAPI] Error processing prompt: {e}")
             traceback.print_exc()
           return web.json_response(
@@ -502,22 +502,22 @@ class ChatGPTAPI:
             image_filename = f"{_request_id}.png"
             image_path = self.images_dir/image_filename
             im.save(image_path)
-            
+
             # Get URL for the saved image
             try:
               image_url = request.app.router['static_images'].url_for(filename=image_filename)
               base_url = f"{request.scheme}://{request.host}"
               full_image_url = base_url + str(image_url)
-              
+
               await response.write(json.dumps({'images': [{'url': str(full_image_url), 'content_type': 'image/png'}]}).encode('utf-8') + b'\n')
             except KeyError as e:
               if DEBUG >= 2: print(f"Error getting image URL: {e}")
               # Fallback to direct file path if URL generation fails
               await response.write(json.dumps({'images': [{'url': str(image_path), 'content_type': 'image/png'}]}).encode('utf-8') + b'\n')
-            
+
             if is_finished:
               await response.write_eof()
-            
+
           except Exception as e:
             if DEBUG >= 2: print(f"Error processing image: {e}")
             if DEBUG >= 2: traceback.print_exc()

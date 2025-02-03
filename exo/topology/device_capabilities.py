@@ -164,7 +164,7 @@ async def device_capabilities() -> DeviceCapabilities:
 
 async def mac_device_capabilities() -> DeviceCapabilities:
   model_id, chip_id, memory = await get_mac_system_info()
-  
+
   return DeviceCapabilities(
     model=model_id,
     chip=chip_id,
@@ -224,73 +224,82 @@ async def linux_device_capabilities() -> DeviceCapabilities:
       flops=DeviceFlops(fp32=0, fp16=0, int8=0),
     )
 
+async def windows_device_capabilities() -> DeviceCapabilities:
+    return await asyncio.to_thread(_windows_device_capabilities_sync)
 
-def windows_device_capabilities() -> DeviceCapabilities:
+def _windows_device_capabilities_sync() -> DeviceCapabilities:
   import psutil
 
   def get_gpu_info():
     import win32com.client  # install pywin32
 
-    wmiObj = win32com.client.GetObject("winmgmts:\\\\.\\root\\cimv2")
-    gpus = wmiObj.ExecQuery("SELECT * FROM Win32_VideoController")
+    try:
+        # Используем правильный синтаксис для создания объекта WMI
+        wmi = win32com.client.GetObject("winmgmts:")
+        gpus = wmi.InstancesOf("Win32_VideoController")
 
-    gpu_info = []
-    for gpu in gpus:
-      info = {
-        "Name": gpu.Name,
-        "AdapterRAM": gpu.AdapterRAM,  # Bug in this property, returns -ve for VRAM > 4GB (uint32 overflow)
-        "DriverVersion": gpu.DriverVersion,
-        "VideoProcessor": gpu.VideoProcessor
-      }
-      gpu_info.append(info)
+        gpu_info = []
+        for gpu in gpus:
+            info = {
+                "Name": gpu.Name,
+                "AdapterRAM": gpu.AdapterRAM,  # Возвращает -1 для VRAM > 4GB (ограничение uint32)
+                "DriverVersion": gpu.DriverVersion,
+                "VideoProcessor": gpu.VideoProcessor
+            }
+            gpu_info.append(info)
 
-    return gpu_info
+        return gpu_info
+    except Exception as e:
+        print(f"Ошибка при получении информации о GPU: {e}")
+        return []
 
   gpus_info = get_gpu_info()
   gpu_names = [gpu['Name'] for gpu in gpus_info]
 
   contains_nvidia = any('nvidia' in gpu_name.lower() for gpu_name in gpu_names)
-  contains_amd = any('amd' in gpu_name.lower() for gpu_name in gpu_names)
+  contains_amd = any('amd' in gpu_name.lower() or 'radeon' in gpu_name.lower() for gpu_name in gpu_names)
 
   if contains_nvidia:
-    import pynvml
+      import pynvml
 
-    pynvml.nvmlInit()
-    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-    gpu_raw_name = pynvml.nvmlDeviceGetName(handle).upper()
-    gpu_name = gpu_raw_name.rsplit(" ", 1)[0] if gpu_raw_name.endswith("GB") else gpu_raw_name
-    gpu_memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+      pynvml.nvmlInit()
+      handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+      gpu_raw_name = pynvml.nvmlDeviceGetName(handle).upper()
+      gpu_name = gpu_raw_name.rsplit(" ", 1)[0] if gpu_raw_name.endswith("GB") else gpu_raw_name
+      gpu_memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
 
-    if DEBUG >= 2: print(f"NVIDIA device {gpu_name=} {gpu_memory_info=}")
+      if DEBUG >= 2: print(f"NVIDIA device {gpu_name=} {gpu_memory_info=}")
 
-    return DeviceCapabilities(
-      model=f"Windows Box ({gpu_name})",
-      chip=gpu_name,
-      memory=gpu_memory_info.total // 2**20,
-      flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
-    )
+      pynvml.nvmlShutdown()
+
+      return DeviceCapabilities(
+          model=f"Windows Box ({gpu_name})",
+          chip=gpu_name,
+          memory=gpu_memory_info.total // (2**20),
+          flops=CHIP_FLOPS.get(gpu_name, DeviceFlops(fp32=0, fp16=0, int8=0)),
+      )
   elif contains_amd:
-    # For AMD GPUs, pyrsmi is the way (Official python package for rocm-smi)
-    from pyrsmi import rocml
+      # Для AMD GPUs, pyrsmi является официальным пакетом для rocm-smi
+      from pyrsmi import rocm_smi as rocml
 
-    rocml.smi_initialize()
-    gpu_name = rocml.smi_get_device_name(0).upper()
-    gpu_memory_info = rocml.smi_get_device_memory_total(0)
+      rocml.smi_initialize()
+      gpu_name = rocml.smi_get_device_name(0).upper()
+      gpu_memory_info = rocml.smi_get_device_memory_total(0)
 
-    if DEBUG >= 2: print(f"AMD device {gpu_name=} {gpu_memory_info=}")
+      if DEBUG >= 2: print(f"AMD device {gpu_name=} {gpu_memory_info=}")
 
-    rocml.smi_shutdown()
+      rocml.smi_shutdown()
 
-    return DeviceCapabilities(
-      model="Windows Box ({gpu_name})",
-      chip={gpu_name},
-      memory=gpu_memory_info.total // 2**20,
-      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
-    )
+      return DeviceCapabilities(
+          model=f"Windows Box ({gpu_name})",
+          chip=gpu_name,
+          memory=gpu_memory_info // (2**20),
+          flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+      )
   else:
-    return DeviceCapabilities(
-      model=f"Windows Box (Device: Unknown)",
-      chip=f"Unknown Chip (Device(s): {gpu_names})",
-      memory=psutil.virtual_memory().total // 2**20,
-      flops=DeviceFlops(fp32=0, fp16=0, int8=0),
-    )
+      return DeviceCapabilities(
+          model=f"Windows Box (Device: Unknown)",
+          chip=f"Unknown Chip (Device(s): {gpu_names})",
+          memory=psutil.virtual_memory().total // 2**20,
+          flops=DeviceFlops(fp32=0, fp16=0, int8=0),
+      )

@@ -14,7 +14,7 @@ from pathlib import Path
 
 def check_system_state():
     print("\n=== System State Check ===", flush=True)
-    
+
     # Add macOS-specific checks
     try:
         # Check powermetrics with sudo
@@ -26,15 +26,15 @@ def check_system_state():
             print("\nPower Metrics:", power_metrics.stdout, flush=True)
         except Exception as e:
             print(f"Error getting power metrics: {e}", flush=True)
-        
+
         # Check thermal state
         thermal_state = subprocess.run(['pmset', '-g', 'therm'], capture_output=True, text=True)
         print("\nThermal State:", thermal_state.stdout, flush=True)
-        
+
         # Check if running under Rosetta
         arch = subprocess.run(['arch'], capture_output=True, text=True)
         print("\nArchitecture:", arch.stdout, flush=True)
-        
+
         # Check MLX compilation mode - only if mlx is available
         try:
             import mlx.core as mx
@@ -46,7 +46,7 @@ def check_system_state():
             print("\nMLX: Not installed", flush=True)
         except Exception as e:
             print(f"\nError checking MLX: {e}", flush=True)
-        
+
     except Exception as e:
         print(f"Error in macOS checks: {e}", flush=True)
 
@@ -58,7 +58,7 @@ def check_system_state():
             cpu_info = subprocess.run(['sysctl', 'machdep.cpu'], capture_output=True, text=True)
             if cpu_info.returncode == 0:
                 print(f"CPU Info (Apple Silicon):", cpu_info.stdout, flush=True)
-            
+
             # Parse powermetrics output for clearer CPU frequency display
             try:
                 power_metrics = subprocess.run(
@@ -68,11 +68,11 @@ def check_system_state():
                 if power_metrics.returncode == 0:
                     output = power_metrics.stdout
                     print("\nDetailed CPU Frequency Information:")
-                    
+
                     # Extract cluster frequencies and max frequencies
                     current_cluster = None
                     max_freqs = {'E': 0, 'P0': 0, 'P1': 0}
-                    
+
                     for line in output.split('\n'):
                         # Track which cluster we're processing
                         if "E-Cluster" in line:
@@ -81,13 +81,13 @@ def check_system_state():
                             current_cluster = 'P0'
                         elif "P1-Cluster" in line:
                             current_cluster = 'P1'
-                            
+
                         # Get current frequencies
                         if "HW active frequency:" in line:
                             freq = line.split(':')[1].strip()
                             if freq != "0 MHz":
                                 print(f"Current {current_cluster}-Cluster Frequency: {freq}")
-                        
+
                         # Get max frequencies from residency lines
                         if current_cluster and "active residency:" in line and "MHz:" in line:
                             try:
@@ -105,22 +105,22 @@ def check_system_state():
                                     max_freqs[current_cluster] = max(max_freqs[current_cluster], max(freqs))
                             except Exception:
                                 continue
-                    
+
                     # Print max frequencies
                     print("\nMaximum Available Frequencies:")
                     for cluster, max_freq in max_freqs.items():
                         if max_freq > 0:
                             print(f"{cluster}-Cluster Max: {max_freq:.0f} MHz")
-                            
+
             except Exception as e:
                 print(f"Error parsing powermetrics: {e}", flush=True)
         else:
             # Use psutil for other systems
             cpu_freq = psutil.cpu_freq()
             print(f"CPU Frequency - Current: {cpu_freq.current:.2f}MHz, Min: {cpu_freq.min:.2f}MHz, Max: {cpu_freq.max:.2f}MHz", flush=True)
-        
+
         print(f"\nCPU Usage per Core: {psutil.cpu_percent(percpu=True)}%", flush=True)
-        
+
         # Check if running in low power mode
         power_mode = subprocess.run(['pmset', '-g'], capture_output=True, text=True)
         print("\nPower Settings:", power_mode.stdout, flush=True)
@@ -134,7 +134,7 @@ def check_system_state():
         print(f"Total: {mem.total/1024/1024/1024:.2f}GB", flush=True)
         print(f"Available: {mem.available/1024/1024/1024:.2f}GB", flush=True)
         print(f"Used: {mem.used/1024/1024/1024:.2f}GB ({mem.percent}%)", flush=True)
-        
+
         # Check swap
         swap = psutil.swap_memory()
         print(f"Swap Used: {swap.used/1024/1024/1024:.2f}GB of {swap.total/1024/1024/1024:.2f}GB", flush=True)
@@ -148,7 +148,7 @@ def check_system_state():
         print("MLX Environment Variables:", flush=True)
         mlx_vars = {k: v for k, v in os.environ.items() if k.startswith('MLX')}
         print(json.dumps(mlx_vars, indent=2), flush=True)
-        
+
         # Check Metal GPU memory allocation
         gpu_mem = subprocess.run(['sysctl', 'iogpu'], capture_output=True, text=True)
         print("GPU Memory Settings:", gpu_mem.stdout, flush=True)
@@ -171,7 +171,7 @@ def check_system_state():
     try:
         load_avg = psutil.getloadavg()
         print(f"Load Average: {load_avg}", flush=True)
-        
+
         # Get top processes by CPU and Memory
         print("\nTop Processes by CPU Usage:", flush=True)
         processes = []
@@ -182,7 +182,7 @@ def check_system_state():
                     processes.append(pinfo)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        
+
         # Sort and display top 5 CPU-consuming processes
         sorted_by_cpu = sorted(processes, key=lambda x: x['cpu_percent'] or 0, reverse=True)[:5]
         for proc in sorted_by_cpu:
@@ -198,7 +198,7 @@ def check_gpu_access():
         # Check if MLX can see the GPU
         import mlx.core as mx
         print("MLX device info:", mx.default_device())
-        
+
         # Check Metal device availability
         result = subprocess.run(['system_profiler', 'SPDisplaysDataType'], capture_output=True, text=True)
         print("GPU Info:", result.stdout)
@@ -251,7 +251,7 @@ async def measure_performance(api_endpoint: str, prompt: str, model: str) -> Dic
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
+                "temperature": 0.7,
                 "stream": True
             }
         )
@@ -347,18 +347,18 @@ def optimize_system_performance():
     try:
         # Try to set high performance power mode
         subprocess.run(['sudo', 'pmset', '-a', 'powermode', '2'], check=False)
-        
+
         # Ensure MLX uses performance cores and GPU
         os.environ['MLX_FORCE_P_CORES'] = '1'
         os.environ['MLX_METAL_PREWARM'] = '1'
         os.environ['MLX_USE_GPU'] = '1'
-        
+
         # Set process priority
         current_process = psutil.Process()
         try:
             # Set highest priority
             subprocess.run(['sudo', 'renice', '-n', '-20', '-p', str(current_process.pid)], check=False)
-            
+
             # Print current process state
             print("\nProcess State Before Benchmark:", flush=True)
             proc_info = subprocess.run(
@@ -366,25 +366,25 @@ def optimize_system_performance():
                 capture_output=True, text=True
             )
             print(proc_info.stdout, flush=True)
-            
+
             # Verify power mode
             power_info = subprocess.run(['pmset', '-g'], capture_output=True, text=True)
             if 'powermode            0' in power_info.stdout:
                 print("\nWarning: System still in normal power mode. Trying to set high performance mode again...", flush=True)
                 subprocess.run(['sudo', 'pmset', '-a', 'powermode', '2'], check=False)
-            
+
         except Exception as e:
             print(f"Warning: Could not set process priority: {e}", flush=True)
-            
+
     except Exception as e:
         print(f"Warning: Could not optimize system performance: {e}", flush=True)
-    
+
     # Print optimization status
     print("\nOptimization Settings:", flush=True)
     print("MLX Environment Variables:", flush=True)
     for var in ['MLX_FORCE_P_CORES', 'MLX_METAL_PREWARM', 'MLX_USE_GPU']:
         print(f"{var}: {os.environ.get(var, 'Not set')}", flush=True)
-    
+
     try:
         nice_value = psutil.Process().nice()
         print(f"Process Nice Value: {nice_value}", flush=True)

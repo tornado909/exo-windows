@@ -87,7 +87,7 @@ class TopologyViz:
     max_width = self.console.width - 6  # Full width minus padding and icon
 
     # Calculate available height for content
-    panel_height = 15  # Fixed panel height
+    panel_height = 13  # Fixed panel height
     available_lines = panel_height - 2  # Subtract 2 for panel borders
     lines_per_entry = available_lines // len(requests) if requests else 0
 
